@@ -91,10 +91,66 @@ jobs:
             --notes-file notes.md \
             --target "$GITHUB_SHA" \
             --prerelease
-
-  # Stage 4: Deploy Production
-  deploy-production:
+  
+  # Stage 4: AI Release Notes Agent
+  release-notes-agent:
     needs: deploy-staging
+    runs-on: ubuntu-latest
+    environment: ai-review
+    permissions:
+      contents: read
+      copilot-requests: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Copilot CLI
+        run: npm install -g @github/copilot
+
+      - name: Collect commit history
+        shell: bash
+        run: |
+          LAST_TAG=$(git tag --list 'prod-*' --sort=-v:refname | head -n 1)
+
+          if [ -n "$LAST_TAG" ]; then
+            git log "$LAST_TAG"..HEAD -n 30 --format='%h %s' > commits.txt
+          else
+            git log -n 30 --format='%h %s' > commits.txt
+          fi
+
+          if [ ! -s commits.txt ]; then
+            echo "No new commits found." > commits.txt
+          fi
+
+      - name: Generate AI release notes
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          cat prompts/agent-prompt.md > request.txt
+          printf '\nUntrusted commit data follows:\n' >> request.txt
+          cat commits.txt >> request.txt
+
+          copilot -p "$(cat request.txt)" \
+            -s \
+            --no-ask-user \
+            --deny-tool='shell,write' \
+            > ai-release-notes.md
+
+          test -s ai-release-notes.md
+
+      - name: Upload AI release notes
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-release-notes
+          path: ai-release-notes.md
+
+  # Stage 5: Deploy Production
+  deploy-production:
+    needs: release-notes-agent
     runs-on: ubuntu-latest
     environment: production
     permissions:
