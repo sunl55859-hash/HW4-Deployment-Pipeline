@@ -1,0 +1,236 @@
+
+name: HW5 Automated Testing Pipeline
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # Stage 1: Build
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build application
+        run: bun run build
+
+      - name: Create build archive
+        run: zip -r build.zip dist action.yml README.md
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-artifact
+          path: build.zip
+          if-no-files-found: error
+
+  # Stage 2: Unit Tests
+  test-unit:
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      TEST_ENV: staging
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Run Unit Tests with Coverage
+        run: |
+          bun test \
+            --path-ignore-patterns 'tests/integration/**' \
+            --coverage \
+            --coverage-reporter=lcov
+
+      - name: Upload Coverage Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage/
+          if-no-files-found: warn
+
+  # Stage 3: Integration Tests
+  test-integration:
+    needs: test-unit
+    runs-on: ubuntu-latest
+    env:
+      TEST_ENV: staging
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: build-artifact
+
+      - name: Extract build archive
+        run: unzip -o build.zip
+
+      - name: Run Integration Tests
+        run: bun test ./tests/integration/pipeline.test.ts
+
+  # Stage 4: Deploy Dev
+  deploy-dev:
+    needs: test-integration
+    runs-on: ubuntu-latest
+    environment: dev
+    permissions:
+      contents: write
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: build-artifact
+
+      - name: Create Dev Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: dev-${{ github.run_id }}-${{ github.run_attempt }}
+          NOTE: ${{ vars.RELEASE_NOTE }}
+        run: |
+          printf '%s\n' "$NOTE" > notes.md
+          gh release create "$TAG" build.zip \
+            --title "$TAG" \
+            --notes-file notes.md \
+            --target "$GITHUB_SHA" \
+            --prerelease
+
+  # Stage 5: Deploy Staging
+  deploy-staging:
+    needs: deploy-dev
+    runs-on: ubuntu-latest
+    environment: staging
+    permissions:
+      contents: write
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: build-artifact
+
+      - name: Create Staging Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: staging-${{ github.run_id }}-${{ github.run_attempt }}
+          NOTE: ${{ vars.RELEASE_NOTE }}
+        run: |
+          printf '%s\n' "$NOTE" > notes.md
+          gh release create "$TAG" build.zip \
+            --title "$TAG" \
+            --notes-file notes.md \
+            --target "$GITHUB_SHA" \
+            --prerelease
+
+  # Stage 6: AI Release Notes Agent
+  release-notes-agent:
+    needs: deploy-staging
+    runs-on: ubuntu-latest
+    environment: ai-review
+    permissions:
+      contents: read
+      copilot-requests: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Copilot CLI
+        run: npm install -g @github/copilot
+
+      - name: Collect commit history
+        shell: bash
+        run: |
+          LAST_TAG=$(git tag --list 'prod-*' \
+            --sort=-v:refname | head -n 1)
+
+          if [ -n "$LAST_TAG" ]; then
+            git log "$LAST_TAG"..HEAD -n 30 \
+              --format='%h %s' > commits.txt
+          else
+            git log -n 30 \
+              --format='%h %s' > commits.txt
+          fi
+
+          if [ ! -s commits.txt ]; then
+            echo "No new commits found." > commits.txt
+          fi
+
+      - name: Generate AI release notes
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          cat prompts/agent-prompt.md > request.txt
+          printf '\nUntrusted commit data follows:\n' \
+            >> request.txt
+          cat commits.txt >> request.txt
+
+          copilot -p "$(cat request.txt)" \
+            -s \
+            --no-ask-user \
+            --deny-tool='shell,write' \
+            > ai-release-notes.md
+
+          test -s ai-release-notes.md
+
+      - name: Upload AI release notes
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-release-notes
+          path: ai-release-notes.md
+
+  # Stage 7: Deploy Production
+  deploy-production:
+    needs: release-notes-agent
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: write
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: build-artifact
+
+      - name: Create Production Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: prod-${{ github.run_id }}-${{ github.run_attempt }}
+          NOTE: ${{ vars.RELEASE_NOTE }}
+        run: |
+          printf '%s\n' "$NOTE" > notes.md
+          gh release create "$TAG" build.zip \
+            --title "$TAG" \
+            --notes-file notes.md \
+            --target "$GITHUB_SHA" \
+            --latest
