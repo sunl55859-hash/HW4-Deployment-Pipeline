@@ -39,3 +39,9 @@ test("Merged pull request returns merged", () => {
 test("Empty template returns null", () => {
   expect(applyTemplate("", {})).toBeNull();
 });
+ 
+// HW5: Simulate a failed unit test
+test("HW5 intentional failure test", () => {
+  expect(1 + 1).toBe(3);
+});
+
