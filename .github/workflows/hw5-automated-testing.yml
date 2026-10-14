@@ -5,6 +5,15 @@ on:
   push:
     branches: [master]
   workflow_dispatch:
+    inputs:
+      test_env:
+        description: "Testing environment"
+        required: true
+        default: "staging"
+        type: choice
+        options:
+          - staging
+          - prod
 
 permissions:
   contents: read
