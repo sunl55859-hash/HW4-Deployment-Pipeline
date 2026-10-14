@@ -1,4 +1,3 @@
-
 name: HW5 Automated Testing Pipeline
 
 on:
@@ -17,6 +16,9 @@ on:
 
 permissions:
   contents: read
+
+env:
+  COVERAGE_THRESHOLD: 20
 
 jobs:
   # Stage 1: Build
@@ -45,12 +47,12 @@ jobs:
           path: build.zip
           if-no-files-found: error
 
-  # Stage 2: Unit Tests
+  # Stage 2: Unit Tests with Coverage Gate
   test-unit:
     needs: build
     runs-on: ubuntu-latest
     env:
-      TEST_ENV: staging
+      TEST_ENV: ${{ inputs.test_env || 'staging' }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -68,6 +70,57 @@ jobs:
             --coverage \
             --coverage-reporter=lcov
 
+      - name: Enforce 20 Percent Line Coverage Gate
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          REPORT=coverage/lcov.info
+          if [ ! -s "$REPORT" ]; then
+            echo "::error::Missing or empty $REPORT"
+            exit 1
+          fi
+
+          read -r COVERED TOTAL < <(
+            awk -F: '
+              /^LH:/ { covered += $2 }
+              /^LF:/ { total += $2 }
+              END { printf "%d %d\n", covered, total }
+            ' "$REPORT"
+          )
+
+          if [ "$TOTAL" -eq 0 ]; then
+            echo "::error::Coverage report has no instrumented lines"
+            exit 1
+          fi
+
+          COVERAGE=$(awk -v h="$COVERED" -v t="$TOTAL" \
+            'BEGIN { printf "%.2f", 100 * h / t }')
+
+          echo "LINE_COVERAGE=$COVERAGE" >> "$GITHUB_ENV"
+          echo "Line coverage: ${COVERAGE}% (${COVERED}/${TOTAL} lines)"
+          echo "Required coverage: ${COVERAGE_THRESHOLD}%"
+
+          {
+            echo "## Automated Test Coverage"
+            echo ""
+            echo "| Metric | Result |"
+            echo "|---|---|"
+            echo "| Line coverage | ${COVERAGE}% |"
+            echo "| Covered lines | ${COVERED} / ${TOTAL} |"
+            echo "| Required threshold | ${COVERAGE_THRESHOLD}% |"
+            echo "| TEST_ENV | ${TEST_ENV} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if awk -v h="$COVERED" -v t="$TOTAL" \
+            -v min="$COVERAGE_THRESHOLD" \
+            'BEGIN { exit ((100 * h / t) < min ? 0 : 1) }'; then
+            echo "::error::Coverage ${COVERAGE}% is below ${COVERAGE_THRESHOLD}%"
+            exit 1
+          fi
+
+          echo "Coverage gate passed: ${COVERAGE}% >= ${COVERAGE_THRESHOLD}%"
+
       - name: Upload Coverage Report
         if: always()
         uses: actions/upload-artifact@v4
@@ -81,7 +134,7 @@ jobs:
     needs: test-unit
     runs-on: ubuntu-latest
     env:
-      TEST_ENV: staging
+      TEST_ENV: ${{ inputs.test_env || 'staging' }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
