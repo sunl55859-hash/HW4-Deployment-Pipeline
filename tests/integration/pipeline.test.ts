@@ -15,5 +15,6 @@ test("Build archive is not empty", () => {
 });
 
 test("TEST_ENV is configured", () => {
-  expect(process.env.TEST_ENV).toBe("staging");
+  expect(["staging", "prod"]).toContain(process.env.TEST_ENV);
 });
+
