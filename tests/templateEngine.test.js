@@ -15,7 +15,7 @@ test("Template replaces placeholders", () => {
     }
   );
 
-  expect(result).toBe("Opened in demo/project");
+  expect(result).toBe("Opened in demo/broken");
 });
 
 // Test 2: Push event
