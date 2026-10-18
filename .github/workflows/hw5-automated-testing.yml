@@ -18,7 +18,7 @@ permissions:
   contents: read
 
 env:
-  COVERAGE_THRESHOLD: 20
+  COVERAGE_THRESHOLD: 70
 
 jobs:
   # Stage 1: Build
@@ -47,10 +47,21 @@ jobs:
           path: build.zip
           if-no-files-found: error
 
-  # Stage 2: Unit Tests with Coverage Gate
+  # Stage 2: Unit Tests (matrix: OS x Bun version) with Coverage Gate
   test-unit:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      checks: write # needed to publish the JUnit test report
+    strategy:
+      fail-fast: false # let every matrix combination finish
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        bun-version: [latest, "1.2.x"]
+    defaults:
+      run:
+        shell: bash # same shell on every OS (Windows uses Git Bash)
     env:
       TEST_ENV: ${{ inputs.test_env || 'staging' }}
     steps:
@@ -59,19 +70,44 @@ jobs:
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ matrix.bun-version }}
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Run Unit Tests with Coverage
+      - name: Run Unit Tests with Coverage and JUnit Report
         run: |
+          mkdir -p reports
           bun test \
             --path-ignore-patterns 'tests/integration/**' \
             --coverage \
-            --coverage-reporter=lcov
+            --coverage-reporter=lcov \
+            --reporter=junit \
+            --reporter-outfile=reports/junit.xml
 
-      - name: Enforce 20 Percent Line Coverage Gate
-        shell: bash
+      - name: Upload JUnit Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-report-${{ matrix.os }}-bun-${{ matrix.bun-version }}
+          path: reports/junit.xml
+          if-no-files-found: warn
+
+      - name: Publish Test Results
+        if: always() && matrix.os == 'ubuntu-latest' && matrix.bun-version == 'latest'
+        continue-on-error: true # a reporting problem must not block the pipeline
+        uses: dorny/test-reporter@v1
+        with:
+          name: Unit Test Results
+          path: reports/junit.xml
+          reporter: java-junit
+          fail-on-error: false
+
+      # The coverage gate runs once (Linux + latest Bun) so the percentage is
+      # not compared across different runtimes.
+      - name: Enforce 70 Percent Line Coverage Gate
+        if: matrix.os == 'ubuntu-latest' && matrix.bun-version == 'latest'
         run: |
           set -euo pipefail
 
@@ -125,7 +161,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: coverage-report
+          name: coverage-report-${{ matrix.os }}-bun-${{ matrix.bun-version }}
           path: coverage/
           if-no-files-found: warn
 
@@ -155,6 +191,44 @@ jobs:
 
       - name: Run Integration Tests
         run: bun test ./tests/integration/pipeline.test.ts
+
+  # Notification: open a GitHub issue when build or tests fail
+  notify-failure:
+    needs: [build, test-unit, test-integration]
+    if: failure()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Open issue for failed pipeline
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          TEST_ENV: ${{ inputs.test_env || 'staging' }}
+          BUILD_RESULT: ${{ needs.build.result }}
+          UNIT_RESULT: ${{ needs.test-unit.result }}
+          INTEGRATION_RESULT: ${{ needs.test-integration.result }}
+        run: |
+          cat > issue.md <<EOF
+          The HW5 automated testing pipeline failed, so no release was created.
+
+          | Job | Result |
+          |---|---|
+          | build | ${BUILD_RESULT} |
+          | test-unit | ${UNIT_RESULT} |
+          | test-integration | ${INTEGRATION_RESULT} |
+
+          - Workflow run: ${RUN_URL}
+          - Commit: ${GITHUB_SHA}
+          - Branch: ${GITHUB_REF_NAME}
+          - TEST_ENV: ${TEST_ENV}
+          EOF
+
+          gh issue create \
+            --title "CI failed: run #${GITHUB_RUN_NUMBER} (${GITHUB_REF_NAME})" \
+            --body-file issue.md
 
   # Stage 4: Deploy Dev
   deploy-dev:

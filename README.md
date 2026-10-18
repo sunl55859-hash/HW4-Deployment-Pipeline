@@ -1,6 +1,8 @@
 <h1 align="center" id="title">Activity Log</h1>
 
 [![HW5 Automated Testing Pipeline](https://github.com/sunl55859-hash/HW4-Deployment-Pipeline/actions/workflows/hw5-automated-testing.yml/badge.svg)](https://github.com/sunl55859-hash/HW4-Deployment-Pipeline/actions/workflows/hw5-automated-testing.yml)
+[![Build & Test (master)](https://img.shields.io/github/actions/workflow/status/sunl55859-hash/HW4-Deployment-Pipeline/hw5-automated-testing.yml?branch=master&label=build%20%26%20test)](https://github.com/sunl55859-hash/HW4-Deployment-Pipeline/actions/workflows/hw5-automated-testing.yml)
+[![Latest release](https://img.shields.io/github/v/release/sunl55859-hash/HW4-Deployment-Pipeline?include_prereleases&label=latest%20release)](https://github.com/sunl55859-hash/HW4-Deployment-Pipeline/releases)
 
 ![activity log](https://socialify.git.ci/TheDanniCraft/activity-log/image?forks=1&issues=1&language=1&logo=https%3A%2F%2Favatars.githubusercontent.com%2Fu%2F66677362&name=1&owner=1&pattern=Solid&pulls=1&stargazers=1&theme=Auto)
 
