@@ -79,8 +79,9 @@ jobs:
       - name: Run Unit Tests with Coverage and JUnit Report
         run: |
           mkdir -p reports
-          bun test \
-            --path-ignore-patterns 'tests/integration/**' \
+          # Pass the unit test files explicitly: older Bun versions do not
+          # support --path-ignore-patterns and would treat it as a filter.
+          bun test tests/*.test.js \
             --coverage \
             --coverage-reporter=lcov \
             --reporter=junit \
